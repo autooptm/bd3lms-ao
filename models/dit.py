@@ -1,4 +1,5 @@
 import math
+import os
 import typing
 
 import einops
@@ -22,6 +23,9 @@ except:
   FLEX_ATTN_AVAILABLE = False
 
 # Flags required to enable jit fusion kernels
+_AO_OPT_1 = os.environ.get('BD3LM_OPT_1', '1').lower() not in ('0', 'false', 'no')
+_ao_script = (lambda f: f) if _AO_OPT_1 else torch.jit.script
+
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_override_can_fuse_on_cpu(True)
@@ -109,7 +113,7 @@ def modulate(x: torch.Tensor,
              scale: torch.Tensor) -> torch.Tensor:
   return x * (1 + scale) + shift
 
-@torch.jit.script
+@_ao_script
 def bias_dropout_add_scale_fused_train(
     x: torch.Tensor,
     bias: typing.Optional[torch.Tensor],
@@ -119,7 +123,7 @@ def bias_dropout_add_scale_fused_train(
   return bias_dropout_add_scale(
     x, bias, scale, residual, prob, True)
 
-@torch.jit.script
+@_ao_script
 def bias_dropout_add_scale_fused_inference(
     x: torch.Tensor,
     bias: typing.Optional[torch.Tensor],
@@ -129,7 +133,7 @@ def bias_dropout_add_scale_fused_inference(
   return bias_dropout_add_scale(
     x, bias, scale, residual, prob, False)
 
-@torch.jit.script
+@_ao_script
 def modulate_fused(x: torch.Tensor,
                    shift: torch.Tensor,
                    scale: torch.Tensor) -> torch.Tensor:
@@ -769,7 +773,11 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
           sample_mode=sample_mode,
           mask=mask,
           store_kv=store_kv)
+      if cross_attn and not sample_mode:
+        x = x[:, :self.n].contiguous()
       x = self.output_layer(x, t_cond)
-    if cross_attn and not sample_mode:
-      x = x[:, :self.n]
     return x
+
+
+if _AO_OPT_1:
+  DDiTBlock.forward = torch.compile(DDiTBlock.forward)

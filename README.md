@@ -1,3 +1,60 @@
+<div align="center">
+  <a href="https://autooptm.com"><img src=".autooptm/logo.png" width="96" alt="AutoOptm"></a>
+
+  <h1>bd3lms · optimized by <a href="https://autooptm.com">AutoOptm</a></h1>
+
+  <p><b>1.49x faster end to end</b> on the command below, output verified against the stock program.</p>
+
+  <p>
+    <a href="https://autooptm.com"><img alt="speedup" src="https://img.shields.io/badge/end--to--end-1.49x-2ea44f"></a>
+    <a href="https://github.com/kuleshov-group/bd3lms/commit/1c3e8f43d88dfbcee5ff2aa6932a9e74b31ae1d7"><img alt="base" src="https://img.shields.io/badge/upstream-1c3e8f43d88d-blue"></a>
+    <img alt="card" src="https://img.shields.io/badge/measured%20on-RTX%204090-lightgrey">
+  </p>
+</div>
+
+> This is a fork of [kuleshov-group/bd3lms](https://github.com/kuleshov-group/bd3lms) at commit
+> [`1c3e8f43d88d`](https://github.com/kuleshov-group/bd3lms/commit/1c3e8f43d88dfbcee5ff2aa6932a9e74b31ae1d7) with the AutoOptm patch applied on top.
+> The optimisation was found, measured and verified automatically by [AutoOptm](https://autooptm.com);
+> the patch is also kept verbatim at [`.autooptm/autooptm.patch`](.autooptm/autooptm.patch).
+
+## The result
+
+| | |
+|---|---|
+| **Command** | `python main.py loader.global_batch_size=512 loader.eval_global_batch_size=512 loader.batch_size=64 loader.eval_batch_size=64 model=small algo=bd3lm algo.clip_search_widths=[0.5,0.6,0.7,0.8,0.9] data=lm1b-wrap model.length=128 block_size=16 wandb.name=bd3lm-lm1b-block_size16 mode=train model.attn_backend=flex training.resample=True` (the repository's `scripts/train/train_lm1b_bd3lm.sh`) |
+| **Entry point** | `main.py` |
+| **Unit measured** | one BD3-LM optimizer step on LM1B: 8 accumulated micro-batches of 64×128 tokens (65,536 tokens), bf16 autocast, AdamW + EMA. Measured on a 12-step launch on one GPU (`trainer.max_steps=12 trainer.devices=1`) |
+| **Before (stock)** | 1,845 ms per step (36.6 s for the 12-step training loop) |
+| **After (this tree, all switches default ON)** | 895 ms per step (24.6 s for the 12-step training loop; both loops include ~14 s of once-per-launch setup, sanity validation and warm-up, which a long run pays only once) |
+| **Speedup** | **1.49x** end to end on the 12-step launch (2.06x per optimizer step), RTX 4090, noise floor of the host 0.05% |
+| **Output** | training loss within 1.1% (relative) of the stock program's on the same batches; 0.77% on held-out LM1B batches |
+
+### What changed
+
+| File | Where | Gain (alone) |
+|---|---|---|
+| `models/dit.py` | DDiTBlock.forward | 1.427x |
+| `diffusion.py` | _forward_pass_diffusion() | 1.085x |
+| `models/dit.py` | DIT.forward | 1.064x |
+
+## Reproduce
+
+```bash
+git clone https://github.com/autooptm/bd3lms-ao.git
+cd bd3lms-ao
+# set up exactly as upstream documents (LM1B is built by the repository's own loader; point data.cache_dir at a writable directory), then:
+python main.py loader.global_batch_size=512 loader.eval_global_batch_size=512 loader.batch_size=64 loader.eval_batch_size=64 model=small algo=bd3lm algo.clip_search_widths=[0.5,0.6,0.7,0.8,0.9] data=lm1b-wrap model.length=128 block_size=16 wandb.name=bd3lm-lm1b-block_size16 mode=train model.attn_backend=flex training.resample=True
+```
+
+The diff against upstream is one commit: `git log -1 -p` shows it, and
+`git diff 1c3e8f43d88d` is the same patch as `.autooptm/autooptm.patch`.
+
+---
+
+<div align="center"><sub>Optimized by <a href="https://autooptm.com">AutoOptm</a> — point it at a repository, get back a verified speedup and the patch.</sub></div>
+
+---
+
 # [Block Diffusion: Interpolating Between Autoregressive and Diffusion Language Models](https://arxiv.org/abs/2503.09573) (ICLR 2025 Oral)
 By [Marianne Arriola](https://m-arriola.com/), [Aaron Gokaslan](https://skylion007.github.io), [Justin T Chiu](https://justinchiu.netlify.app), [Zhihan Yang](https://zhihanyang2022.github.io/), [Zhixuan Qi](https://zhixuanqi.com/), [Jiaqi Han](https://hanjq17.github.io/), [Subham Sekhar Sahoo](https://s-sahoo.github.io), [Volodymyr Kuleshov](https://www.cs.cornell.edu/~kuleshov/)
 

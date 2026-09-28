@@ -1,4 +1,5 @@
 import itertools
+import os
 from dataclasses import dataclass
 
 import hydra.utils
@@ -22,6 +23,23 @@ def _sample_categorical(categorical_probs):
   gumbel_norm = (1e-10 - (torch.rand_like(categorical_probs) + 1e-10).log())
   samples = (categorical_probs / gumbel_norm).argmax(dim=-1)
   return samples
+
+_AO_FAST_LOSS = os.environ.get('BD3LM_FAST_LOSS', '1').lower() not in ('0', 'false', 'no')
+_AO_OPT_1 = os.environ.get('BD3LM_OPT_1', '1').lower() not in ('0', 'false', 'no')
+
+
+def _subs_log_p_theta(logits, x0, xt, mask_index, neg_infinity):
+  logits[:, :, mask_index] += neg_infinity
+  lse = torch.logsumexp(logits, dim=-1)
+  gathered = torch.gather(logits, -1, x0[:, :, None]).squeeze(-1)
+  log_p_theta = gathered - lse
+  return torch.where(xt != mask_index,
+                     torch.zeros_like(log_p_theta), log_p_theta)
+
+
+if _AO_OPT_1:
+  _subs_log_p_theta = torch.compile(_subs_log_p_theta)
+
 
 def _unsqueeze(x, reference):
   return x.view(
@@ -846,6 +864,15 @@ class Diffusion(L.LightningModule):
     x_input = xt
     if self.cross_attn:
       x_input = torch.cat((xt, x0), dim=-1)
+
+    if self.parameterization == 'subs' and _AO_FAST_LOSS:
+      sigma_cond = self._process_sigma(sigma)
+      with torch.amp.autocast('cuda', dtype=torch.float32):
+        logits = self.backbone(x_input, sigma_cond)
+      log_p_theta = _subs_log_p_theta(
+        logits, x0, xt, self.mask_index, self.neg_infinity)
+      utils.print_nans(log_p_theta, 'model_output')
+      return loss_scale * log_p_theta
 
     model_output = self.forward(x_input, sigma=sigma)
     utils.print_nans(model_output, 'model_output')
